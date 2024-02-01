@@ -1,43 +1,50 @@
 import sys
 from pyspark import SparkContext, SparkConf
 from operator import add
-import re
-
-# Check if sufficient arguments are provided
-if len(sys.argv) != 3:
-    print("Usage: spark-submit script_name.py <input_file> <output_directory>")
-    sys.exit(1)
-
-input_file = sys.argv[1]
-output_directory = sys.argv[2]
-
-conf = SparkConf()
-sc = SparkContext(conf=conf)
 
 def preprocess_line(line):
+    """
+    Preprocess the line: lowercasing and removing non-alphabetic characters
+    """
+    import re
+    # Convert to lower case and keep only alphabetic characters and spaces
     line = line.lower()
-    line = re.sub(r'[^a-z\s]', '', line)
-    return line
+    line = re.sub('[^a-z\s]+', ' ', line)
+    return line.split()  # Return a list of words instead of a string
 
-# Load and preprocess the text file
-lines = sc.textFile(input_file).map(preprocess_line)
+def generate_bigrams(words_list):
+    """
+    Generate bigrams from a list of words
+    """
+    return [((words_list[i], words_list[i+1]), 1) for i in range(len(words_list)-1)]
 
-# Generate bigrams
-bigrams = lines.flatMap(lambda line: [((line.split()[i], line.split()[i + 1]), 1) for i in range(len(line.split()) - 1)])
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("Usage: bigram_model <input_file> <output_dir>", file=sys.stderr)
+        exit(-1)
 
-# Count the frequency of each bigram
-bigram_counts = bigrams.reduceByKey(add)
+    # Initialize Spark
+    conf = SparkConf()
+    sc = SparkContext(conf=conf)
 
-# Count the frequency of each word
-word_counts = lines.flatMap(lambda line: line.split()).map(lambda word: (word, 1)).reduceByKey(add)
+    # Read data, preprocess each line, and split into words
+    lines = sc.textFile(sys.argv[1])
+    words_lists = lines.map(preprocess_line)
 
-# Calculate bigram probabilities
-# Join the bigram_counts RDD with the word_counts RDD to get the probability of each bigram
-# Each element in the bigram_counts RDD (Resilient Distributed Dataset) is a tuple of the form ((word1, word2), (bigram_count, word1_count))
-# x[0] is the bigram (word1, word2), x[1] is (bigram_count, word1_count). The probability of the bigram is bigram_count/word1_count
-bigram_probabilities = bigram_counts.join(word_counts).map(lambda x: (x[0], float(x[1][0])/x[1][1]))
+    # Generate bigrams and count occurrences of each bigram
+    bigrams = words_lists.flatMap(generate_bigrams).reduceByKey(add)
 
-# Save the results to a file
-bigram_probabilities.coalesce(1, shuffle=True).saveAsTextFile(output_directory)
+    # Count occurrences of each word
+    word_counts = words_lists.flatMap(lambda words_list: [(word, 1) for word in words_list]).reduceByKey(add)
 
-sc.stop()
+    # Join the bigram counts with the first word counts to compute conditional frequencies
+    bigram_with_first_word_count = bigrams.map(lambda x: (x[0][0], (x[0], x[1]))).join(word_counts)
+
+    # Calculate the conditional probability for each bigram
+    conditional_frequencies = bigram_with_first_word_count.map(lambda x: (x[1][0][0], x[1][0][1] / float(x[1][1])))
+
+    # Save the output
+    conditional_frequencies.coalesce(1, shuffle=True).saveAsTextFile(sys.argv[2])
+
+    # Stop the Spark context
+    sc.stop()
