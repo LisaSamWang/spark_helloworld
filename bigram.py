@@ -20,7 +20,7 @@ def generate_bigrams(words_list):
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: bigram_model <input_file> <output_dir>", file=sys.stderr)
+        print("Usage: spark-submit bigram.py <input_file> <output_dir>", file=sys.stderr)
         exit(-1)
 
     # Initialize Spark
